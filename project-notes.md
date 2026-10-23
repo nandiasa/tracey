@@ -1,6 +1,6 @@
-# Trace App — Project Notes
+# Tracey — Project Notes
 
-*Status: Concept/discussion phase. Nothing has been built yet.*
+*Status: Phase 1 built and on GitHub (`nandiasa/tracey`, private). Phase 2 (trace quality) is next. See the README for how to run it.*
 
 ## Background
 
@@ -67,13 +67,15 @@ A purpose-built sketch-to-vector app for **logo/lettering/symbol design specific
 
 ## UI / UX
 
-- Neutral, established icon language borrowed from Adobe/Figma/Affinity/Canva conventions — no invented icon metaphors
-- Two-tone neutral dark grey palette (darker panel background, slightly lighter grey for input fields/pills), white text — modeled on the Figma reference (`references/figma_ui.png`)
-- **One restrained accent color**, reserved only for active tools/selected/interactive states — not decoration. Checked for real contrast (WCAG AA minimum, ideally AAA given Nandia's eye condition) rather than eyeballed
-- **No general color tooling** — color is intentionally left for downstream apps (Illustrator/Figma); keeps focus entirely on trace quality, avoids confusing users with features that don't optimize the core job
-- **Typography:** Geist or Inter, no mono fonts — chosen for on-screen legibility (tall x-height, open counters), disambiguated characters (I / l / 1), and a wide weight range for building hierarchy without relying only on size or color
-- **Big-by-default UI**, globally adjustable scale (icons, text, spacing, and hit targets scale together, not separately) — a deliberate stance against the cramped, everything-in-a-toolbar density most pro tools default to
-- Minimal always-visible controls (fidelity, corner sensitivity, fill/stroke, artwork-type preset, optical correction); secondary options tucked behind disclosure rather than cluttering the main view
+The final direction comes from Nandia's own Figma design (`figma/app_1.svg`, `figma/app_2.svg`), which replaced the earlier dark-theme idea.
+
+- **Light, minimal layout:** `#EBEBEB` app background, white dot-grid canvas, near-black text
+- **One bold accent:** the settings panel is flat yellow `#FCEC4E`, and yellow is also used for selected states (the batch-trace check badges)
+- **Icons:** Google Material Symbols (Outlined), the same set used in the Figma file. Copyright icon for Symbol, italic for Lettering, gesture for Illustration
+- **Typography:** Inter. No mono fonts in the UI
+- **Layout:** top bar (file name, Import, presets, `T T T` UI-size control); left sidebar (artwork type, grid, batch trace); canvas; yellow settings panel on the right that can be hidden; batch-trace drawer along the bottom
+- **No color tooling.** Color is left to Illustrator/Figma; the app only cares about the trace
+- **Big-by-default, adjustable UI size**, because of Nandia's eyesight. Keep this in mind for anything small or faint (disabled controls at 40% opacity are currently too faint)
 
 ## Platform & scope
 
@@ -94,25 +96,42 @@ The core structural advantage: Illustrator's Image Trace has to stay generic eno
 
 Plus the structural one underneath all of it: **cost** — a focused tool instead of a slice of a full Creative Cloud subscription.
 
-## Environment check (as of this conversation)
+## Phase 1 — what was built
 
-- Project folder: `/Volumes/Nandi/SANROK/Trace App` — git available (2.50.1)
-- Xcode: only Command Line Tools installed, no full Xcode.app (not required for the web app path)
-- Node/npm: **not yet installed** — needed before any build work starts
-- Python 3.9.6 present; Rust/cargo not installed (neither required for the current plan)
+- Vite + React + TypeScript web app in `app/`, fully client-side
+- Fill-mode tracing with `imagetracerjs`; Fidelity and Corner sensitivity sliders drive its line and curve tolerances
+- Three artwork types (each only changes the starting slider values for now)
+- Drag-and-drop or click-to-import, PNG/JPG; transparent PNGs flattened to white
+- Batch trace: marks detected by connected regions, strays flagged and never deleted, Together/Separate toggle, per-file SVG or `.zip` export
+- Clean SVG export: viewBox, black fill, no background layer, no outline strokes
+- Artboard pan (right-drag) and zoom (`Cmd/Ctrl +/-/0`, `Cmd/Ctrl` + scroll or pinch)
+- Visible but disabled for now: Stroke mode, Optical correction, the Lettering/Illustration-specific sliders, Save/Load preset, undo/redo, snap to grid
+
+**Quality benchmark after Phase 1:** `sketch_1.png` traces to about 84 anchors at default settings (71 at the most simplified), against about 30 segments in the hand-finished `Logo_1.svg`. Raising Corner sensitivity turns all curves into straight segments. This is why Phase 2 replaces the engine.
+
+## Roadmap
+
+1. **Phase 2 — Trace quality:** Potrace-based engine (real cubic curves, corner threshold and curve tolerance that map onto the sliders), a geometric cleanup pass, anchor-point overlay with a live count, tracing off the main thread. Target: 30–40 anchors on `sketch_1.png`
+2. **Phase 3 — Stroke / centerline tracing**
+3. **Phase 4 — Optical correction:** joint trimming, vertical/horizontal weight balance, overshoot
+4. **Phase 5 — Workflow:** undo, presets, project file, per-brand profiles
+
+## Setup and deployment
+
+- Repo: GitHub `nandiasa/tracey` (private). Nandia uses GitHub Desktop; changes are pushed from here
+- Deployment target: Cloudflare (Workers & Pages connected to the repo). Root directory `app`, build `npm run build`, output `dist`. Branches get preview links; `main` is the live site
+- Node.js 24 LTS is installed on this machine
 
 ## Reference materials on hand
 
 - [`sketches/sketch_1.png`](sketches/sketch_1.png) — filled-silhouette ribbon/S-shaped sketch
 - [`sketches/sketch_all.png`](sketches/sketch_all.png) — full exploration sheet, mixing filled-silhouette marks and thin-line stroke doodles
 - [`sketches/Logo_1.svg`](sketches/Logo_1.svg) — finished vector logo (heavily hand-edited after Illustrator auto-trace), corresponds to `sketch_1.png`; confirms fill-based sketch → fill-based final logo
-- [`references/figma_ui.png`](references/figma_ui.png) — Figma's dark UI panel, used as the visual/contrast/accent-color reference
+- [`references/figma_ui.png`](references/figma_ui.png) — Figma's dark UI panel, used early on as a contrast reference (superseded by Nandia's own design)
+- [`figma/app_1.svg`](figma/app_1.svg), [`figma/app_2.svg`](figma/app_2.svg) — Nandia's Figma UI design: main screen and batch-trace drawer
 
-## Open items — not yet decided
+## Open items
 
-- Actual screen/layout structure — what's on screen at each step of the workflow
-- Still to provide (from the earlier ask): 1–2 finished logos Nandia considers optically well-balanced, to use as a concrete reference for junction-trimming/weight-compensation tuning later
-- Her comfort level with being hands-on in the build vs. purely art-directing/reviewing
-
----
-*Nothing has been built yet. Per instruction, build work starts only when Nandia says "please create this app."*
+- 1–2 finished logos Nandia considers optically well-balanced, as a reference for tuning optical correction in Phase 4
+- Whether the deployed site should be public or limited to the team (Cloudflare Access)
+- Final product name. Working name: Tracey

@@ -1,4 +1,3 @@
-// @ts-expect-error - imagetracerjs ships no types, see imagetracerjs.d.ts
 import ImageTracer from "imagetracerjs";
 
 export interface TraceParams {
