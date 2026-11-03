@@ -1,90 +1,118 @@
-import ImageTracer from "imagetracerjs";
+import type { Pixels } from "./bitmap.ts";
+import type { TraceParams, TraceResult } from "./pipeline.ts";
+import type { TraceRequest } from "./worker.ts";
 
-export interface TraceParams {
-  /** 0-100. Higher = more geometric / simplified (fewer anchor points). */
-  fidelity: number;
-  /** 0-100. Higher = sharp turns are kept sharp instead of being smoothed into a curve. */
-  cornerSensitivity: number;
-}
+export type { TraceParams, TraceResult };
 
-const MAX_TRACE_EDGE = 2400;
-
-/** Big sheets are traced from a downscaled copy; the SVG viewBox scales it back. */
-function capSize(src: ImageData, maxEdge: number): ImageData {
-  const longEdge = Math.max(src.width, src.height);
-  if (longEdge <= maxEdge) return src;
-  const s = maxEdge / longEdge;
-  const from = document.createElement("canvas");
-  from.width = src.width;
-  from.height = src.height;
-  from.getContext("2d")!.putImageData(src, 0, 0);
-  const to = document.createElement("canvas");
-  to.width = Math.round(src.width * s);
-  to.height = Math.round(src.height * s);
-  const ctx = to.getContext("2d")!;
-  ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(from, 0, 0, to.width, to.height);
-  return ctx.getImageData(0, 0, to.width, to.height);
-}
-
-function lerp(a: number, b: number, t: number) {
-  return a + (b - a) * t;
-}
-
-function clamp01(n: number) {
-  return Math.min(1, Math.max(0, n));
-}
-
-/**
- * Fill-mode trace only (Phase 1). Traces the imported sketch as filled black
- * shapes on white - see project-notes.md for why stroke/centerline tracing
- * isn't built yet.
+/*
+ * Main-thread side of the trace worker (see worker.ts / pipeline.ts).
  */
-export function traceImageData(source: ImageData, params: TraceParams): string {
-  const imgd = capSize(source, MAX_TRACE_EDGE);
-  const fidelityT = clamp01(params.fidelity / 100);
-  const cornerT = clamp01(params.cornerSensitivity / 100);
 
-  // Fidelity drives how loosely the traced path is allowed to deviate from
-  // the raw pixels - low = hug every wobble, high = simplify aggressively.
-  const ltres = lerp(0.2, 4, fidelityT);
-  // Corner sensitivity drives how tightly curve segments must fit sharp
-  // turns - low = corners get smoothed into a curve, high = kept sharp.
-  const qtres = lerp(2.5, 0.15, cornerT);
+let worker: Worker | null = null;
+let nextId = 1;
+const waiting = new Map<number, { resolve: (r: TraceResult) => void; reject: (e: Error) => void }>();
+/** Image keys whose pixels have been sent to the worker. */
+const sent = new Set<string>();
 
-  const options = {
-    // Ink sketches are effectively black-on-white: a straight 2-color
-    // threshold reads them far better than color quantization.
-    colorsampling: 0,
-    numberofcolors: 2,
-    pathomit: 4,
-    ltres,
-    qtres,
-    rightangleenhance: cornerT > 0.5,
-    roundcoords: 1,
-    scale: 1,
-    viewbox: true,
-    strokewidth: 0,
+function getWorker(): Worker {
+  if (worker) return worker;
+  worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+  worker.onmessage = (e: MessageEvent<{ id: number; result?: TraceResult; error?: string }>) => {
+    const job = waiting.get(e.data.id);
+    if (!job) return;
+    waiting.delete(e.data.id);
+    if (e.data.result) job.resolve(e.data.result);
+    else job.reject(new Error(e.data.error ?? "Trace failed"));
   };
+  worker.onerror = (e) => {
+    // A crashed worker loses its image cache: fail what's waiting and start fresh next time.
+    for (const job of waiting.values()) job.reject(new Error(e.message || "Trace worker crashed"));
+    waiting.clear();
+    sent.clear();
+    worker?.terminate();
+    worker = null;
+  };
+  return worker;
+}
 
-  return cleanSvg(ImageTracer.imagedataToSVG(imgd, options));
+const imageKeys = new WeakMap<object, string>();
+
+/** A stable key per pixel buffer, so the worker can cache it. */
+export function imageKeyFor(pixels: Pixels): string {
+  let key = imageKeys.get(pixels);
+  if (!key) imageKeys.set(pixels, (key = `img${nextId++}`));
+  return key;
+}
+
+function post(channel: string, imageKey: string, pixels: Pixels | undefined, params: TraceParams): Promise<TraceResult> {
+  const w = getWorker();
+  const id = nextId++;
+  const msg: TraceRequest = { id, channel, imageKey, params, pixels };
+  return new Promise((resolve, reject) => {
+    waiting.set(id, { resolve, reject });
+    w.postMessage(msg);
+  });
+}
+
+/** Traces in the worker. imageKey must change whenever the pixels do. */
+export async function traceInWorker(
+  channel: string,
+  imageKey: string,
+  pixels: Pixels,
+  params: TraceParams
+): Promise<TraceResult> {
+  if (!sent.has(imageKey)) {
+    sent.add(imageKey);
+    return post(channel, imageKey, pixels, params);
+  }
+  try {
+    return await post(channel, imageKey, undefined, params);
+  } catch (err) {
+    // The worker only keeps recent images; send the pixels again if it dropped them.
+    if (!(err instanceof Error && err.message.startsWith("No pixels"))) throw err;
+    return post(channel, imageKey, pixels, params);
+  }
 }
 
 /**
- * The tracer emits a white background layer and a stroke on every shape.
- * Neither belongs in a logo export: drop the white paths (holes in the ink
- * are already real subpaths of the black ones) and use a plain black fill.
+ * Runs one task at a time and, while it's busy, keeps only the newest request.
+ * Dragging a slider then traces as fast as the worker can go without a backlog.
+ * Results are dropped if a request with a different scope has come in since.
  */
-function cleanSvg(svg: string): string {
-  return svg
-    .replace(/<path[^>]*\/>/g, (tag) => {
-      const m = tag.match(/fill="rgb\((\d+),(\d+),(\d+)\)"/);
-      if (!m) return tag;
-      // The palette drifts to near-white / near-black on JPEGs, so judge by brightness.
-      const luma = (Number(m[1]) * 299 + Number(m[2]) * 587 + Number(m[3]) * 114) / 1000;
-      return luma > 128 ? "" : tag.replace(m[0], 'fill="#000000"');
-    })
-    .replace(/ (stroke|stroke-width|opacity|desc)="[^"]*"/g, "");
+export function createLatestRunner<T>() {
+  let busy = false;
+  let pending: { scope: string; task: () => Promise<T>; done: (r: T) => void } | null = null;
+  let scope: string | null = null;
+
+  function pump() {
+    if (busy || !pending) return;
+    const job = pending;
+    pending = null;
+    busy = true;
+    job
+      .task()
+      .then((r) => {
+        if (job.scope === scope) job.done(r);
+      })
+      .catch((err) => console.error("Trace failed", err))
+      .finally(() => {
+        busy = false;
+        pump();
+      });
+  }
+
+  return {
+    run(nextScope: string, task: () => Promise<T>, done: (r: T) => void) {
+      scope = nextScope;
+      pending = { scope: nextScope, task, done };
+      pump();
+    },
+    /** Forget the current scope, so nothing in flight gets delivered. */
+    clear() {
+      scope = null;
+      pending = null;
+    },
+  };
 }
 
 /** Decodes a File (PNG/JPG) into ImageData via an offscreen canvas. */

@@ -5,7 +5,7 @@ import { Sidebar } from "./components/Sidebar";
 import { Canvas } from "./components/Canvas";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { BatchDrawer, type GroupMode } from "./components/BatchDrawer";
-import { fileToImageData, traceImageData } from "./trace/engine";
+import { createLatestRunner, fileToImageData, imageKeyFor, traceInWorker, type TraceResult } from "./trace/engine";
 import { composeMarks, detectMarks, type DetectedMark } from "./trace/detect";
 import { downloadSvg, downloadZip, traceBatch, type BatchResult, type BatchSource } from "./trace/batch";
 import { TYPE_CONFIGS, type ArtworkType } from "./trace/presets";
@@ -22,7 +22,10 @@ export default function App() {
   const [activeType, setActiveType] = useState<ArtworkType>("symbol");
   const [fidelity, setFidelity] = useState(TYPE_CONFIGS.symbol.defaultFidelity);
   const [cornerSensitivity, setCornerSensitivity] = useState(TYPE_CONFIGS.symbol.defaultCornerSensitivity);
-  const [tracedSvg, setTracedSvg] = useState<string | null>(null);
+  const [traceResult, setTraceResult] = useState<TraceResult | null>(null);
+  const [showAnchors, setShowAnchors] = useState(true);
+  const [liveTrace] = useState(() => createLatestRunner<TraceResult>());
+  const [batchTrace] = useState(() => createLatestRunner<BatchResult[]>());
   const [view, setView] = useState<View>(DEFAULT_VIEW);
   const [gridVisible, setGridVisible] = useState(true);
   const [settingsHidden, setSettingsHidden] = useState(false);
@@ -43,6 +46,7 @@ export default function App() {
     fileToImageData(file)
       .then(({ imageData, dataUrl }) => {
         setSketch({ imageData, dataUrl });
+        setTraceResult(null);
         setFilename(file.name);
         setMarks(null);
         setSelectedIds(new Set());
@@ -71,19 +75,17 @@ export default function App() {
     setCornerSensitivity(TYPE_CONFIGS[type].defaultCornerSensitivity);
   }
 
-  // Re-trace the whole sketch whenever it or the live params change (not while picking batch marks).
+  // Re-trace the whole sketch in the worker whenever it or the live params
+  // change (not while picking batch marks). Mid-drag requests collapse into the latest.
   useEffect(() => {
     if (!sketch || batchActive) {
-      setTracedSvg(null);
+      liveTrace.clear();
+      setTraceResult(null);
       return;
     }
-    try {
-      setTracedSvg(traceImageData(sketch.imageData, { fidelity, cornerSensitivity }));
-    } catch (err) {
-      console.error("Trace failed", err);
-      setTracedSvg(null);
-    }
-  }, [sketch, batchActive, fidelity, cornerSensitivity]);
+    const key = imageKeyFor(sketch.imageData);
+    liveTrace.run(key, () => traceInWorker("live", key, sketch.imageData, { fidelity, cornerSensitivity }), setTraceResult);
+  }, [liveTrace, sketch, batchActive, fidelity, cornerSensitivity]);
 
   // Find the separate marks whenever batch trace is opened on a sketch.
   useEffect(() => {
@@ -155,26 +157,28 @@ export default function App() {
       groupMode === "together" && chosen.length > 1
         ? [{ key: "group", name: `${baseName}_group`, imageData: composeMarks(chosen) }]
         : chosen.map((m) => ({ key: String(m.id), name: `${baseName}_${pad(m.id + 1)}`, imageData: m.imageData }));
+    setBatchResults(null);
     setBatchSources(sources);
   }
 
   // Traced batch results follow the sliders live, like the single-sketch preview.
-  const batchResults = useMemo<BatchResult[] | null>(() => {
-    if (!batchSources) return null;
-    try {
-      return traceBatch(batchSources, { fidelity, cornerSensitivity });
-    } catch (err) {
-      console.error("Batch trace failed", err);
-      return null;
+  const [batchResults, setBatchResults] = useState<BatchResult[] | null>(null);
+  useEffect(() => {
+    if (!batchSources) {
+      batchTrace.clear();
+      setBatchResults(null);
+      return;
     }
-  }, [batchSources, fidelity, cornerSensitivity]);
+    const scope = batchSources.map((s) => imageKeyFor(s.imageData)).join();
+    batchTrace.run(scope, () => traceBatch(batchSources, { fidelity, cornerSensitivity }), setBatchResults);
+  }, [batchTrace, batchSources, fidelity, cornerSensitivity]);
 
   function handleExport() {
     if (batchActive) {
       if (batchResults?.length) downloadZip(`${baseName}_traced`, batchResults);
       return;
     }
-    if (tracedSvg) downloadSvg(baseName, tracedSvg);
+    if (traceResult) downloadSvg(baseName, traceResult.svg);
   }
 
   const scaledStyle = useMemo(
@@ -211,7 +215,9 @@ export default function App() {
           <Canvas
             gridVisible={gridVisible}
             sketch={sketch ? { dataUrl: sketch.dataUrl, width: sketch.imageData.width, height: sketch.imageData.height } : null}
-            tracedSvg={tracedSvg}
+            trace={traceResult}
+            showAnchors={showAnchors}
+            onToggleAnchors={() => setShowAnchors((v) => !v)}
             view={view}
             onViewChange={setView}
             onRequestImport={requestImport}
@@ -239,7 +245,7 @@ export default function App() {
             hidden={settingsHidden}
             onToggleHidden={() => setSettingsHidden((v) => !v)}
             onExport={handleExport}
-            canExport={batchActive ? !!batchResults?.length : !!tracedSvg}
+            canExport={batchActive ? !!batchResults?.length : !!traceResult}
             exportLabel={batchActive ? "Export all (.zip)" : "Export SVG"}
           />
         </div>

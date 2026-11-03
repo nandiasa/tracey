@@ -1,5 +1,5 @@
 import { strToU8, zipSync } from "fflate";
-import { traceImageData, type TraceParams } from "./engine";
+import { imageKeyFor, traceInWorker, type TraceParams } from "./engine";
 
 export interface BatchSource {
   key: string;
@@ -11,10 +11,16 @@ export interface BatchResult {
   key: string;
   name: string;
   svg: string;
+  anchorCount: number;
 }
 
-export function traceBatch(sources: BatchSource[], params: TraceParams): BatchResult[] {
-  return sources.map((s) => ({ key: s.key, name: s.name, svg: traceImageData(s.imageData, params) }));
+export async function traceBatch(sources: BatchSource[], params: TraceParams): Promise<BatchResult[]> {
+  return Promise.all(
+    sources.map(async (s) => {
+      const res = await traceInWorker("batch", imageKeyFor(s.imageData), s.imageData, params);
+      return { key: s.key, name: s.name, svg: res.svg, anchorCount: res.anchors.length };
+    })
+  );
 }
 
 function saveBlob(blob: Blob, filename: string) {

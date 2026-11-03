@@ -1,12 +1,15 @@
-import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { DEFAULT_VIEW, ZOOM_STEP, zoomAround, type View } from "../view";
 import type { DetectedMark } from "../trace/detect";
 import type { BatchResult } from "../trace/batch";
+import type { TraceResult } from "../trace/engine";
 
 interface CanvasProps {
   gridVisible: boolean;
   sketch: { dataUrl: string; width: number; height: number } | null;
-  tracedSvg: string | null;
+  trace: TraceResult | null;
+  showAnchors: boolean;
+  onToggleAnchors: () => void;
   view: View;
   onViewChange: (view: View) => void;
   onRequestImport: () => void;
@@ -27,11 +30,17 @@ interface CanvasProps {
 }
 
 const FIT_MARGIN = 48;
+/** On-screen radius of an anchor marker, whatever the zoom... */
+const ANCHOR_PX = 3.5;
+/** ...shrunk toward this when anchors sit closer on screen than the markers are wide. */
+const ANCHOR_MIN_PX = 1.5;
 
 export function Canvas({
   gridVisible,
   sketch,
-  tracedSvg,
+  trace,
+  showAnchors,
+  onToggleAnchors,
   view,
   onViewChange,
   onRequestImport,
@@ -155,7 +164,9 @@ export function Canvas({
               <div className="result-card" key={r.key}>
                 <div className="result-svg" dangerouslySetInnerHTML={{ __html: r.svg }} />
                 <div className="result-meta">
-                  <span>{r.name}</span>
+                  <span>
+                    {r.name} <span className="result-anchors">· {r.anchorCount} pts</span>
+                  </span>
                   <button onClick={() => results.onExportOne(r)} title="Download this SVG">
                     <span className="msi">download</span>
                   </button>
@@ -176,6 +187,16 @@ export function Canvas({
             <button onClick={() => onViewChange(zoomAround(view, ZOOM_STEP))} title="Zoom in (Cmd/Ctrl +)">
               <span className="msi">zoom_in</span>
             </button>
+            {!batch && trace ? (
+              <button
+                className={`anchor-count${showAnchors ? " on" : ""}`}
+                onClick={onToggleAnchors}
+                title={showAnchors ? "Hide anchor points" : "Show anchor points"}
+              >
+                <span className="msi">{showAnchors ? "visibility" : "visibility_off"}</span>
+                {trace.anchors.length} anchor points
+              </button>
+            ) : null}
           </div>
 
           {sketch ? (
@@ -184,7 +205,10 @@ export function Canvas({
               style={{ width: stageW, height: stageH, transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}
             >
               <img src={sketch.dataUrl} alt="Imported sketch" className={batch ? "full" : ""} />
-              {!batch && tracedSvg ? <div className="trace-layer" dangerouslySetInnerHTML={{ __html: tracedSvg }} /> : null}
+              {!batch && trace ? <div className="trace-layer" dangerouslySetInnerHTML={{ __html: trace.svg }} /> : null}
+              {!batch && trace && showAnchors && stageW > 0 ? (
+                <AnchorOverlay trace={trace} pxPerUnit={(stageW * view.zoom) / trace.width} />
+              ) : null}
               {batch?.marks?.map((m) => (
                 <button
                   key={m.id}
@@ -209,5 +233,33 @@ export function Canvas({
         </>
       )}
     </div>
+  );
+}
+
+/** Typical gap between neighbouring anchors, in image pixels. */
+function anchorSpacing(trace: TraceResult): number {
+  const a = trace.anchors;
+  const gaps: number[] = [];
+  for (let i = 1; i < a.length; i++) gaps.push(Math.hypot(a[i].x - a[i - 1].x, a[i].y - a[i - 1].y));
+  gaps.sort((x, y) => x - y);
+  return gaps.length ? gaps[gaps.length >> 1] : Infinity;
+}
+
+/** Anchor points drawn over the trace: squares for corners, circles for smooth points. */
+function AnchorOverlay({ trace, pxPerUnit }: { trace: TraceResult; pxPerUnit: number }) {
+  const spacing = useMemo(() => anchorSpacing(trace), [trace]);
+  // Zoomed out on a full sheet, markers shrink so the drawing stays readable under them.
+  const px = Math.min(ANCHOR_PX, Math.max(ANCHOR_MIN_PX, spacing * pxPerUnit * 0.2));
+  const r = px / pxPerUnit;
+  return (
+    <svg className="anchor-layer" viewBox={`0 0 ${trace.width} ${trace.height}`} preserveAspectRatio="none">
+      {trace.anchors.map((a, i) =>
+        a.corner ? (
+          <rect key={i} x={a.x - r} y={a.y - r} width={2 * r} height={2 * r} strokeWidth={r / 2.5} />
+        ) : (
+          <circle key={i} cx={a.x} cy={a.y} r={r} strokeWidth={r / 2.5} />
+        )
+      )}
+    </svg>
   );
 }

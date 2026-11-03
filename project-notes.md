@@ -1,6 +1,6 @@
 # Tracey — Project Notes
 
-*Status: Phase 1 built and on GitHub (`nandiasa/tracey`, private). Phase 2 (trace quality) is next. See the README for how to run it.*
+*Status: Phase 2 (trace quality) built on branch `phase-2-trace-quality`, not yet merged or deployed. Phase 3 (stroke/centerline) is next. See the README for how to run it.*
 
 ## Background
 
@@ -109,9 +109,24 @@ Plus the structural one underneath all of it: **cost** — a focused tool instea
 
 **Quality benchmark after Phase 1:** `sketch_1.png` traces to about 84 anchors at default settings (71 at the most simplified), against about 30 segments in the hand-finished `Logo_1.svg`. Raising Corner sensitivity turns all curves into straight segments. This is why Phase 2 replaces the engine.
 
+## Phase 2 — what was built
+
+- **Approach:** Illustrator's Image Trace is the quality bar, used only as a black-box benchmark: compare its output, never take the program apart. Only open-source engines and published algorithms.
+- **Engine choice, tested on `sketch_1.png`:** Potrace beat VTracer clearly (63 vs 79 anchors at their simplest, smoother curves, no bunched points on straight edges). Neither got near 36 on its own, so the quality comes from Tracey's own cleanup pass.
+- **Pipeline** (`app/src/trace/pipeline.ts`): resample + threshold (small sketches scaled up first to keep anti-aliased edge detail) → Potrace (`esm-potrace-wasm`) → cleanup pass (`refine.ts`) → SVG with one compound path per shape.
+- **Cleanup pass:** finds corners, including rounded-off ones, and sharpens them by extending the edges on either side. Merges micro-bevels into one corner, detects straight edges (with a limit on how much they may bow, so gentle arcs stay curves) and snaps near-horizontal/vertical ones. Puts anchors at curve extremes and refits curves with Schneider's least-squares method, keeping tangents smooth where a curve meets a line.
+- **Settings scale per shape**, not per image, so a small letter beside a big symbol gets the same treatment, and export size doesn't matter.
+- **Thin pen strokes:** how far the outline may move, and how big a corner can be, is also capped by the ink's thickness (about 6× the stroke width), while anchor spacing still follows the drawing's overall size. Round stroke ends stay round instead of being sharpened into spikes. Before this, thin line drawings on `sketch_all.png` were distorted. They now match the sketch, with about 880 anchors across the sheet at Fidelity 75 (about 1,450 when tolerances were simply tied to thickness).
+- **Specks:** only ink smaller than 0.25% of the sketch's long edge is dropped as noise, so small dots like an eye survive.
+- **Result:** `sketch_1.png` → 37–38 anchors at Symbol defaults (Fidelity 85, Corner 60), against 84 in Phase 1 and 36 in the hand-finished `Logo_1.svg`. The full `sketch_all.png` sheet traces in ~2.4 s the first time and ~30 ms per slider move after that.
+- **Preset defaults changed** to match the new slider meaning: Symbol 85/60, Lettering 65/50, Illustration 20/25.
+- **License:** Potrace is GPL-2.0. Fine while private; needs a decision before any public or paid release (see README).
+- **Anchor overlay:** markers shrink when anchors sit close on screen (zoomed out on a full sheet) and return to full size when zoomed in.
+- **Not done yet:** handles aren't shown in the overlay; no comparison against a real Illustrator trace yet.
+
 ## Roadmap
 
-1. **Phase 2 — Trace quality:** Potrace-based engine (real cubic curves, corner threshold and curve tolerance that map onto the sliders), a geometric cleanup pass, anchor-point overlay with a live count, tracing off the main thread. Target: 30–40 anchors on `sketch_1.png`
+1. **Phase 2 — Trace quality (done):** Potrace-based engine, geometric cleanup pass, anchor-point overlay with a live count, tracing off the main thread. Target 30–40 anchors on `sketch_1.png`; reached 37–38
 2. **Phase 3 — Stroke / centerline tracing**
 3. **Phase 4 — Optical correction:** joint trimming, vertical/horizontal weight balance, overshoot
 4. **Phase 5 — Workflow:** undo, presets, project file, per-brand profiles
@@ -131,6 +146,8 @@ Plus the structural one underneath all of it: **cost** — a focused tool instea
 - [`figma/app_1.svg`](figma/app_1.svg), [`figma/app_2.svg`](figma/app_2.svg) — Nandia's Figma UI design: main screen and batch-trace drawer
 
 ## Open items
+
+- Illustrator traces of `sketch_1.png` and a few `sketch_all.png` marks (including one stroke trace), saved to `references/`, to benchmark against Illustrator directly
 
 - 1–2 finished logos Nandia considers optically well-balanced, as a reference for tuning optical correction in Phase 4
 - Whether the deployed site should be public or limited to the team (Cloudflare Access)

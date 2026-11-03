@@ -321,6 +321,36 @@ button {
   width: 100%;
   height: 100%;
 }
+.anchor-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.anchor-layer rect,
+.anchor-layer circle {
+  fill: var(--accent);
+  stroke: var(--accent-ink);
+}
+.zoom .anchor-count {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 10px;
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+  font-size: 12.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.zoom .anchor-count.on {
+  color: var(--text);
+}
+.zoom .anchor-count.on .msi {
+  color: var(--text);
+}
 
 .mark-box {
   position: absolute;
@@ -374,6 +404,8 @@ button {
   padding: 8px 24px 24px;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  /* Cards clip their overflow, which would otherwise let rows shrink to fit a short canvas. */
+  grid-auto-rows: max-content;
   gap: 16px;
   align-content: start;
 }
@@ -400,6 +432,10 @@ button {
   border-top: 1px solid var(--line);
   font-size: 12px;
   color: var(--text-muted);
+}
+.result-anchors {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 .result-meta .msi {
   font-size: 18px;
